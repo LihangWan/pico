@@ -225,6 +225,7 @@ def build_agent(args):
     configured_secret_names = _configured_secret_names(args)
     store = SessionStore(workspace.repo_root + "/.pico/sessions")
     model = _build_model_client(args)
+    # session 恢复优先级：用户指定的 session id > latest > new session。
     session_id = args.resume
     if session_id == "latest":
         session_id = store.latest()
@@ -251,6 +252,7 @@ def build_agent(args):
 
 
 def build_arg_parser():
+    #创建一个命令行参数解释器
     parser = argparse.ArgumentParser(
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
         description="Minimal coding agent for Ollama, OpenAI-compatible, Anthropic-compatible, or DeepSeek models.",

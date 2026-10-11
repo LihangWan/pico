@@ -39,7 +39,8 @@ def _parse_iso8601(value):
     except Exception:
         return None
 
-
+# 这一大段是我们核心的评测分析逻辑：定义了各种函数来处理评测结果、运行时数据、记忆依赖实验等，
+# 最终生成结构化的指标数据和分析报告。这些函数会被我们的评测脚本调用，或者在 Jupyter Notebook 里直接运行来分析结果。
 def aggregate_benchmark_artifact(path):
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
     rows = list(payload.get("rows", []))
@@ -81,7 +82,7 @@ def _infer_run_duration_ms(events):
         return 0.0
     return max(0.0, (end_dt - start_dt).total_seconds() * 1000.0)
 
-
+# 下面是一些辅助函数，用于处理评测数据、计算指标、运行特定的实验（比如记忆依赖实验、上下文压缩实验等）。
 def aggregate_run_artifacts(runs_root):
     runs_root = Path(runs_root)
     run_dirs = sorted(path for path in runs_root.glob("*") if path.is_dir())
@@ -434,7 +435,7 @@ def run_large_scale_memory_experiment(repetitions=5):
         "rows": variants,
     }
 
-
+# 它通过不同 history/note/request 长度组合，测：prompt压缩率,current request是否保住,budget reduction 行为
 def run_context_stress_matrix(repetitions=5):
     repetitions = int(repetitions)
     history_levels = [("short", 4), ("medium", 12), ("long", 24)]

@@ -159,10 +159,11 @@ class Pico:
             session=session_store.load(session_id),
             **kwargs,
         )
-
+    # 从这里开始是 Pico 运行时的核心逻辑：构建 prefix、管理 checkpoint、更新记忆、生成 prompt、记录 trace 等等。
     def _ensure_session_shape(self):
         self.session.setdefault("history", [])
         self.session.setdefault("memory", memorylib.default_memory_state())
+        # checkpoint 相关的 session 结构预设好，但不强制要求必须有 checkpoint。
         checkpoints = self.session.setdefault("checkpoints", {})
         if not isinstance(checkpoints, dict):
             checkpoints = {}
@@ -254,7 +255,7 @@ class Pico:
                     status = CHECKPOINT_WORKSPACE_MISMATCH_STATUS
                 else:
                     status = CHECKPOINT_FULL_VALID_STATUS
-
+        # 评估完 checkpoint 状态后，把结果写回 session，这样后续 trace/report 就能拿到这个状态，解释清楚“为什么这一轮 prefix 变了”。
         resume_state = {
             "status": status,
             "stale_paths": stale_paths,
@@ -780,7 +781,9 @@ class Pico:
         task_state = TaskState.create(run_id=self.new_run_id(), task_id=self.new_task_id(), user_request=user_message)
         task_state.resume_status = self.resume_state.get("status", CHECKPOINT_NONE_STATUS)
         self.current_task_state = task_state
+        # 立刻写出第一版 task_state.json
         self.current_run_dir = self.run_store.start_run(task_state)
+        # 记录 run 的开始事件，包括用户请求和初始状态，后续每个重要事件都写 trace，这样就有了完整的事件时间线。
         self.emit_trace(
             task_state,
             "run_started",
@@ -805,6 +808,7 @@ class Pico:
             task_state.record_attempt()
             self.run_store.write_task_state(task_state)
             prompt_started_at = time.monotonic()
+            # 构建 prompt 的时候顺便收集一些 metadata，后面写 trace/report 就用。
             prompt, prompt_metadata = self._build_prompt_and_metadata(user_message)
             self.emit_trace(
                 task_state,
@@ -814,6 +818,7 @@ class Pico:
                     "duration_ms": int((time.monotonic() - prompt_started_at) * 1000),
                 },
             )
+            # 根据 resume 状态不同，创建不同触发原因的 checkpoint，方便后续分析和用户恢复。
             if prompt_metadata.get("resume_status") == CHECKPOINT_PARTIAL_STALE_STATUS:
                 checkpoint = self.create_checkpoint(task_state, user_message, trigger="freshness_mismatch")
                 self.run_store.write_task_state(task_state)
@@ -843,6 +848,7 @@ class Pico:
                         "trigger": "workspace_mismatch",
                     },
                 )
+            # 这里的 context_reduction 触发原因，是指“为了让 prompt 符合模型上下文限制，被动删掉了一些内容”。
             if prompt_metadata.get("budget_reductions"):
                 checkpoint = self.create_checkpoint(task_state, user_message, trigger="context_reduction")
                 self.run_store.write_task_state(task_state)
@@ -854,6 +860,7 @@ class Pico:
                         "trigger": "context_reduction",
                     },
                 )
+            # 让模型根据 prompt 做出决策，返回工具调用或最终答案。
             self.emit_trace(
                 task_state,
                 "model_requested",
@@ -868,7 +875,9 @@ class Pico:
             if getattr(self.model_client, "supports_prompt_cache", False):
                 # 只有后端明确支持时，才把稳定前缀的 hash 作为 cache key 发出去。
                 prompt_cache_key = prompt_metadata.get("prompt_cache_key")
+                # 默认短期缓存，保留在内存里，直到这个 run 结束；后续可以根据实际情况增加更灵活的缓存策略。
                 prompt_cache_retention = "in_memory"
+            # 模型调用也算一次重要事件，记录下来它的输入输出和耗时，方便后续分析和优化。
             model_started_at = time.monotonic()
             raw = self.model_client.complete(
                 prompt,
@@ -876,6 +885,7 @@ class Pico:
                 prompt_cache_key=prompt_cache_key,
                 prompt_cache_retention=prompt_cache_retention,
             )
+            # 模型返回后，先把它的 usage/cache 统计拿到，回填到 prompt_metadata 里，这样 trace/report 就能展示了。
             completion_metadata = dict(getattr(self.model_client, "last_completion_metadata", {}) or {})
             if completion_metadata:
                 # 把后端返回的 usage/cache 统计并回 prompt_metadata，
@@ -893,7 +903,7 @@ class Pico:
                     "duration_ms": int((time.monotonic() - model_started_at) * 1000),
                 },
             )
-
+            # 根据模型的输出类型，走不同的分支：工具调用就执行工具，最终答案就结束循环。
             if kind == "tool":
                 tool_steps += 1
                 name = payload.get("name", "")
@@ -938,13 +948,14 @@ class Pico:
                 self.record({"role": "assistant", "content": payload, "created_at": now()})
                 self.run_store.write_task_state(task_state)
                 continue
-
+            # 只要模型给了 final，哪怕它的格式不完全对，我们都当成最终答案处理，停掉循环。
             final = (payload or raw).strip()
             self.record({"role": "assistant", "content": final, "created_at": now()})
             task_state.finish_success(final)
             self.promote_durable_memory(user_message, final)
             checkpoint = self.create_checkpoint(task_state, user_message, trigger="run_finished")
             self.run_store.write_task_state(task_state)
+            # 这里的 checkpoint trigger 是“run_finished”，表示这是正常结束的 checkpoint，而不是因为某个异常情况才停下来。
             self.emit_trace(
                 task_state,
                 "checkpoint_created",

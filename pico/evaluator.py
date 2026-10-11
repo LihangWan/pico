@@ -435,7 +435,9 @@ class BenchmarkEvaluator:
         }
         self._write_artifact(artifact)
         return artifact
-
+    # 评测核心逻辑：对于基准中的每个任务，准备好对应的 fixture 工作空间（复制一份），
+    # 在这个工作空间里运行 Pico，执行任务指定的 prompt 和工具使用限制，
+    # 最后收集结果、运行 verifier、判断是否通过，并记录所有相关信息（包括中间状态、验证器输出、失败类别等）以供分析。
     def run_task(self, task):
         task = dict(task)
         fixture_source = self.repo_root / task["fixture_repo"]
@@ -464,6 +466,7 @@ class BenchmarkEvaluator:
             max_steps=int(task["step_budget"]),
             max_new_tokens=self.max_new_tokens,
         )
+        # 根据任务定义的 setup 字段预先构造好特定的状态（比如历史记录、记忆、checkpoint 等），以测试模型在不同初始条件下的表现。
         _apply_task_setup(agent, task, fixture_copy_root)
 
         initial_history_empty = len(agent.session["history"]) == 0
@@ -483,7 +486,7 @@ class BenchmarkEvaluator:
         artifact_file = fixture_copy_root / artifact_path
         expected_artifact_exists = artifact_file.exists()
         artifact_digest = _digest_file(artifact_file) if expected_artifact_exists else ""
-
+        # 运行 verifier（通常是一个 shell 命令），根据 verifier 的退出码、预期产物是否存在、是否在预算内、是否因为正确返回最终答案而停止等因素综合判断这个任务是通过还是失败，并归类失败的原因。
         verifier = subprocess.run(
             task["verifier"],
             cwd=fixture_copy_root,
